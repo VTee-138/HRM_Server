@@ -3,6 +3,8 @@ const cors = require('cors');
 const multer = require('multer');
 const path = require('path');
 const pool = require('./database'); // Đảm bảo file database.js của bạn đã được cấu hình
+const { createFolder, uploadFileToDrive } = require('./googleDrive');
+const fs = require('fs');
 
 // --- KHỞI TẠO ỨNG DỤNG ---
 const app = express();
@@ -52,20 +54,35 @@ app.post(
     { name: 'citizenBack', maxCount: 1 }
   ]),
   async (req, res) => {
-    console.log('Received data at /hrminfo:');
-    console.log('Text Fields (req.body):', req.body);
-    console.log('Uploaded Files (req.files):', req.files);
-
     const form = req.body;
     const files = req.files;
 
-    if (!form || Object.keys(form).length === 0) {
-      return res.status(400).json({ success: false, error: 'Không nhận được dữ liệu từ form.' });
+    // Tạo folder Google Drive cho mỗi form (dùng tên + timestamp)
+    const folderName = `${form.fullName}_${Date.now()}`;
+    let folderId;
+    try {
+      folderId = await createFolder(folderName);
+    } catch (err) {
+      return res.status(500).json({ success: false, error: 'Không tạo được folder Google Drive.' });
     }
 
-    const staffPhotoPath = files?.staffPhoto?.[0]?.path || null;
-    const citizenFrontPath = files?.citizenFront?.[0]?.path || null;
-    const citizenBackPath = files?.citizenBack?.[0]?.path || null;
+    // Upload từng file lên folder vừa tạo
+    async function uploadAndGetLink(fileArr) {
+      if (!fileArr || !fileArr[0]) return null;
+      const filePath = fileArr[0].path;
+      try {
+        const fileData = await uploadFileToDrive(filePath, folderId);
+        // Xóa file tạm sau khi upload
+        fs.unlinkSync(filePath);
+        return fileData.webViewLink;
+      } catch (err) {
+        return null;
+      }
+    }
+
+    const staffPhotoLink = await uploadAndGetLink(files.staffPhoto);
+    const citizenFrontLink = await uploadAndGetLink(files.citizenFront);
+    const citizenBackLink = await uploadAndGetLink(files.citizenBack);
 
     try {
       // SỬA LỖI: Cập nhật câu lệnh INSERT để khớp với schema
@@ -107,9 +124,9 @@ app.post(
         form.citizenId,         // $19: So_Can_Cuoc_Cong_Dan
         form.permanentAddress,  // $20: Dia_Chi_Thuong_Tru
         form.currentAddress,    // $21: Dia_Chi_Hien_Tai
-        staffPhotoPath,         // $22: Anh_The_Nhan_Vien_Link
-        citizenFrontPath,       // $23: Anh_CCCD_Mat_Truoc_Link
-        citizenBackPath,        // $24: Anh_CCCD_Mat_Sau_Link
+        staffPhotoLink,         // $22: Anh_The_Nhan_Vien_Link
+        citizenFrontLink,       // $23: Anh_CCCD_Mat_Truoc_Link
+        citizenBackLink,        // $24: Anh_CCCD_Mat_Sau_Link
         form.vehiclePlate,      // $25: Bien_So_Xe
         form.joinInternalGroup, // $26: Tham_Gia_Nhom_Rieng (Đã là 1 hoặc 0)
         form.confirm            // $27: Cam_Doan (Cột này là TEXT, nhưng giá trị 1/0 vẫn chấp nhận được)
