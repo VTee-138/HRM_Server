@@ -31,16 +31,8 @@ app.use(cors({
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // 3. Cấu hình Multer
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, 'uploads/');
-  },
-  filename: (req, file, cb) => {
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    cb(null, `${file.fieldname}-${uniqueSuffix}${path.extname(file.originalname)}`);
-  }
-});
-const upload = multer({ storage: storage });
+const storage = multer.memoryStorage();
+const upload = multer({ storage });
 
 
 // --- ĐỊNH NGHĨA API ROUTE ---
@@ -57,32 +49,19 @@ app.post(
     const form = req.body;
     const files = req.files;
 
-    // Tạo folder Google Drive cho mỗi form (dùng tên + timestamp)
-    const folderName = `${form.fullName}_${Date.now()}`;
-    let folderId;
-    try {
-      folderId = await createFolder(folderName);
-    } catch (err) {
-      return res.status(500).json({ success: false, error: 'Không tạo được folder Google Drive.' });
-    }
+  // Nếu dùng Cloudinary, upload trực tiếp từ Buffer:
+  // Ví dụ:
+  // const cloudinary = require('cloudinary').v2;
+  // const uploadCloudinary = async (file) => {
+  //   if (!file) return null;
+  //   const result = await cloudinary.uploader.upload_stream({ resource_type: 'image' }, (error, result) => { ... });
+  //   return result.secure_url;
+  // };
 
-    // Upload từng file lên folder vừa tạo
-    async function uploadAndGetLink(fileArr) {
-      if (!fileArr || !fileArr[0]) return null;
-      const filePath = fileArr[0].path;
-      try {
-        const fileData = await uploadFileToDrive(filePath, folderId);
-        // Xóa file tạm sau khi upload
-        fs.unlinkSync(filePath);
-        return fileData.webViewLink;
-      } catch (err) {
-        return null;
-      }
-    }
-
-    const staffPhotoLink = await uploadAndGetLink(files.staffPhoto);
-    const citizenFrontLink = await uploadAndGetLink(files.citizenFront);
-    const citizenBackLink = await uploadAndGetLink(files.citizenBack);
+  // Nếu chưa dùng Cloudinary, lưu tạm link null:
+  const staffPhotoLink = null;
+  const citizenFrontLink = null;
+  const citizenBackLink = null;
 
     try {
       // SỬA LỖI: Cập nhật câu lệnh INSERT để khớp với schema
@@ -90,46 +69,45 @@ app.post(
       const query = `
         INSERT INTO hrminfo (
           "Ho_Va_Ten", "Gioi_Tinh", "Ngay_Thang_Nam_Sinh", "Hinh_Thuc_Cong_Viec", "Ngay_Bat_Dau_Lam_Viec", 
-          "Hinh_Thuc_Lam_Viec", "Chuc_Vu", "Phong_Ban", "Thuong_Hieu", "Noi_Lam_Viec", "Ten_Nganh", 
-          "Ten_Truong", "So_Dien_Thoai", "Email", "Link_Facebook", "So_Tai_Khoan_VPBank", 
+          "Hinh_Thuc_Lam_Viec", "Chuc_Vu", "Phong_Ban", "Thuong_Hieu", "Noi_Lam_Viec", "Ten_Don_Vi", 
+          "So_Dien_Thoai", "Email", "Link_Facebook", "So_Tai_Khoan_VPBank", 
           "Chu_Tai_Khoan_VPBank", "Chi_Nhanh_VPBank", "So_Can_Cuoc_Cong_Dan", "Dia_Chi_Thuong_Tru", 
           "Dia_Chi_Hien_Tai", "Anh_The_Nhan_Vien_Link", "Anh_CCCD_Mat_Truoc_Link", "Anh_CCCD_Mat_Sau_Link", 
           "Bien_So_Xe", "Tham_Gia_Nhom_Rieng", "Cam_Doan"
         ) VALUES (
           $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, 
-          $18, $19, $20, $21, $22, $23, $24, $25, $26, $27
-        ) RETURNING "id";
+          $18, $19, $20, $21, $22, $23, $24, $25, $26
+        ) RETURNING "ID";
       `;
 
-      // SỬA LỖI: Cập nhật mảng values để khớp với câu lệnh INSERT
+      // Cập nhật mảng values cho bảng mới
       const values = [
         form.fullName,          // $1: Ho_Va_Ten
         form.gender,            // $2: Gioi_Tinh
-        form.dob || null,       // $3: Ngay_Thang_Nam_Sinh (Gửi null nếu rỗng)
+        form.dob || null,       // $3: Ngay_Thang_Nam_Sinh
         form.position,          // $4: Hinh_Thuc_Cong_Viec
-        form.startDate || null, // $5: Ngay_Bat_Dau_Lam_Viec (Gửi null nếu rỗng)
+        form.startDate || null, // $5: Ngay_Bat_Dau_Lam_Viec
         form.workType,          // $6: Hinh_Thuc_Lam_Viec
         form.role,              // $7: Chuc_Vu
         form.department,        // $8: Phong_Ban
         form.memberOf,          // $9: Thuong_Hieu
         form.workPlace,         // $10: Noi_Lam_Viec
-        form.unitName,          // $11: Ten_Nganh
-        form.schoolName,        // $12: Ten_Truong (Thêm mới)
-        form.phone,             // $13: So_Dien_Thoai
-        form.email,             // $14: Email
-        form.facebook,          // $15: Link_Facebook
-        form.vpBankAccount,     // $16: So_Tai_Khoan_VPBank
-        form.vpBankOwner,       // $17: Chu_Tai_Khoan_VPBank
-        form.vpBankBranch,      // $18: Chi_Nhanh_VPBank
-        form.citizenId,         // $19: So_Can_Cuoc_Cong_Dan
-        form.permanentAddress,  // $20: Dia_Chi_Thuong_Tru
-        form.currentAddress,    // $21: Dia_Chi_Hien_Tai
-        staffPhotoLink,         // $22: Anh_The_Nhan_Vien_Link
-        citizenFrontLink,       // $23: Anh_CCCD_Mat_Truoc_Link
-        citizenBackLink,        // $24: Anh_CCCD_Mat_Sau_Link
-        form.vehiclePlate,      // $25: Bien_So_Xe
-        form.joinInternalGroup, // $26: Tham_Gia_Nhom_Rieng (Đã là 1 hoặc 0)
-        form.confirm            // $27: Cam_Doan (Cột này là TEXT, nhưng giá trị 1/0 vẫn chấp nhận được)
+        form.unitName,          // $11: Ten_Don_Vi
+        form.phone,             // $12: So_Dien_Thoai
+        form.email,             // $13: Email
+        form.facebook,          // $14: Link_Facebook
+        form.vpBankAccount,     // $15: So_Tai_Khoan_VPBank
+        form.vpBankOwner,       // $16: Chu_Tai_Khoan_VPBank
+        form.vpBankBranch,      // $17: Chi_Nhanh_VPBank
+        form.citizenId,         // $18: So_Can_Cuoc_Cong_Dan
+        form.permanentAddress,  // $19: Dia_Chi_Thuong_Tru
+        form.currentAddress,    // $20: Dia_Chi_Hien_Tai
+        staffPhotoLink,         // $21: Anh_The_Nhan_Vien_Link
+        citizenFrontLink,       // $22: Anh_CCCD_Mat_Truoc_Link
+        citizenBackLink,        // $23: Anh_CCCD_Mat_Sau_Link
+        form.vehiclePlate,      // $24: Bien_So_Xe
+        form.joinInternalGroup, // $25: Tham_Gia_Nhom_Rieng
+        form.confirm            // $26: Cam_Doan
       ];
 
       const result = await pool.query(query, values);
